@@ -37,13 +37,13 @@ state = safe_get_optimizer_state_dict(
 )
 ```
 
-对于已有 state 的 optimizer，wrapper 会先深拷贝，再在调用成功后恢复；对于新建 optimizer，则清空调用过程中初始化的 state。
+对于已有 state 的 optimizer，wrapper 会先深拷贝，再在调用后恢复（无论成功与否）；对于新建 optimizer，则在 `finally` 中清空调用过程中初始化的 state。
 
 ## 适用范围与限制
 
 诊断使用 CPU tensor，覆盖 AdamW、Adam、NAdam、RAdam、RMSprop、带或不带 momentum 的 SGD、Adagrad 和 Adadelta。这不代表已验证 fused CUDA optimizer、自定义 optimizer 的副作用或大型分布式训练。
 
-State 快照可能占用大量内存，大模型开销尚未做 benchmark。恢复操作不在 `finally` 中，因此底层调用抛出异常时，已发生的修改可能保留下来。请先在自己的训练环境中验证。
+State 快照可能占用大量内存，大模型开销尚未做 benchmark。恢复操作在 `finally` 中执行（v0.1.1 修复），因此即使底层调用在修改 state 之后抛出异常，仍会先恢复/清空再让异常传播。请先在自己的训练环境中验证。
 
 ## 开发
 

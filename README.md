@@ -41,7 +41,7 @@ The wrapper deep-copies existing optimizer state and reloads it after a successf
 
 ## Scope and limitations
 
-The probe covers AdamW, Adam, NAdam, RAdam, RMSprop, SGD with and without momentum, Adagrad, and Adadelta using CPU tensors. It is not validation of fused CUDA optimizers, custom optimizer side effects, or large distributed jobs. Snapshotting can consume substantial memory; large-model overhead has not been benchmarked. Restoration is not in a `finally` block, so an exception in the underlying call can leave mutations behind. Test your own training setup before relying on the wrapper.
+The probe covers AdamW, Adam, NAdam, RAdam, RMSprop, SGD with and without momentum, Adagrad, and Adadelta using CPU tensors. It is not validation of fused CUDA optimizers, custom optimizer side effects, or large distributed jobs. Snapshotting can consume substantial memory; large-model overhead has not been benchmarked. Restoration runs in a `finally` block (fixed in v0.1.1), so an exception raised by the wrapped call after it has already mutated optimizer state still triggers restore/clear before the exception propagates. Test your own training setup before relying on the wrapper.
 
 ## Development
 

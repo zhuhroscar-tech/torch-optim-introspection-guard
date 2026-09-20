@@ -166,6 +166,104 @@ def test_guard_is_a_vacuous_check_catch():
     assert step_before == 1, "expected the unguarded probe step to have advanced the step counter to 1"
 
 
+def test_guard_restores_state_when_wrapped_call_raises_after_mutating(monkeypatch):
+    """Regression test for a real bug found by this run's stewardship
+    audit: the wrapped ``get_optimizer_state_dict`` call can mutate the
+    optimizer's internal state (via its lr=0 probe step) and THEN raise
+    for an unrelated downstream reason (e.g. a distributed comms failure,
+    an internal torch assertion, or any exception after the mutating
+    step). Before this fix, safe_get_optimizer_state_dict performed its
+    restore/clear step unconditionally AFTER the call returned, so any
+    exception from the wrapped call skipped restoration entirely and left
+    the optimizer's step counter mutated -- silently reproducing the
+    exact class of bug (pytorch/pytorch#164929) this guard exists to
+    prevent, but now blamed on our own wrapper instead of upstream torch.
+
+    This test fails against the pre-fix code (no try/finally): the
+    mutating call succeeds, the exception propagates, and the `else:
+    optimizer.state.clear()` line is never reached, leaving
+    optimizer.state populated with a leaked step=1 entry.
+    """
+    import torch_optim_introspection_guard.core as core_mod
+
+    model = nn.Linear(3, 3, bias=False)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=0.1)
+    assert not optimizer.state, "test requires a FRESH optimizer with no prior state"
+
+    def exploding_get_state_dict(model, optimizer, options=None):
+        # Perform the real mutating call, then raise -- simulating any
+        # failure that occurs after the internal lr=0 probe step but
+        # before get_optimizer_state_dict successfully returns.
+        result = get_optimizer_state_dict(model, optimizer, options=options)
+        raise RuntimeError("simulated downstream failure after internal mutation")
+
+    monkeypatch.setattr(
+        core_mod,
+        "_import_torch",
+        lambda: (torch, StateDictOptions, exploding_get_state_dict),
+    )
+
+    with pytest.raises(RuntimeError, match="simulated downstream failure"):
+        safe_get_optimizer_state_dict(model, optimizer, options=StateDictOptions(full_state_dict=True))
+
+    leaked = bool(optimizer.state) and any(len(v) > 0 for v in optimizer.state.values())
+    assert not leaked, (
+        "safe_get_optimizer_state_dict must restore/clear optimizer state even "
+        "when the wrapped get_optimizer_state_dict call raises after mutating "
+        "it -- restoration must run in a finally block, not unconditionally "
+        "after a successful return"
+    )
+
+
+def test_guard_restores_prior_state_when_wrapped_call_raises_midtraining(monkeypatch):
+    """Same exception-safety fix, but for the had_state=True branch: a
+    mid-training optimizer with real prior state must be restored to that
+    prior state via load_state_dict even when the wrapped call raises,
+    not just cleared to empty (which would be wrong for a non-fresh
+    optimizer) and not just skipped."""
+    import torch_optim_introspection_guard.core as core_mod
+
+    torch.manual_seed(11)
+    weight = torch.randn(3, 3)
+    model = nn.Linear(3, 3, bias=False)
+    model.weight.data.copy_(weight)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=0.1)
+
+    # Two real steps to build up genuine non-empty Adam state.
+    for _ in range(2):
+        model.weight.grad = weight.clone()
+        optimizer.step()
+
+    state_before = copy.deepcopy(optimizer.state_dict())
+
+    def exploding_get_state_dict(model, optimizer, options=None):
+        result = get_optimizer_state_dict(model, optimizer, options=options)
+        raise RuntimeError("simulated downstream failure after internal mutation")
+
+    monkeypatch.setattr(
+        core_mod,
+        "_import_torch",
+        lambda: (torch, StateDictOptions, exploding_get_state_dict),
+    )
+
+    with pytest.raises(RuntimeError, match="simulated downstream failure"):
+        safe_get_optimizer_state_dict(model, optimizer, options=StateDictOptions(full_state_dict=True))
+
+    state_after = optimizer.state_dict()
+    for group_before, group_after in zip(state_before["param_groups"], state_after["param_groups"]):
+        assert group_before == group_after
+    for key in state_before["state"]:
+        for field in state_before["state"][key]:
+            before_val = state_before["state"][key][field]
+            after_val = state_after["state"][key][field]
+            if torch.is_tensor(before_val):
+                assert torch.equal(before_val, after_val), (
+                    f"field {field} not restored after wrapped call raised"
+                )
+            else:
+                assert before_val == after_val, f"field {field} not restored after wrapped call raised"
+
+
 def test_probe_optimizers_registry_is_nonempty_and_constructible():
     """PROBE_OPTIMIZERS must actually resolve to real torch.optim classes;
     this catches a typo'd factory name that diagnose() would otherwise

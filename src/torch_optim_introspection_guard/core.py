@@ -106,6 +106,17 @@ def safe_get_optimizer_state_dict(model, optimizer, options=None):
     the known bug happens to touch, so it also protects against any other
     field a given optimizer's ``step()`` implementation might mutate as a
     side effect of the same internal probing mechanism.
+
+    Restoration runs in a ``finally`` block: if the wrapped
+    ``get_optimizer_state_dict`` call raises AFTER it has already applied
+    its internal step-counter mutation (e.g. a downstream distributed
+    comms failure, an internal torch assertion, or any other exception
+    part-way through the call), the optimizer's real training state is
+    still restored/cleared before the exception propagates. Without this,
+    the guard silently reintroduces the exact class of bug it exists to
+    prevent -- a leaked, incremented step counter on a fresh optimizer,
+    or an unrestored mid-training state -- but with an exception on top,
+    making it more likely to be misdiagnosed as an unrelated failure.
     """
     _torch, _StateDictOptions, get_optimizer_state_dict_fn = _import_torch()
 
@@ -114,12 +125,13 @@ def safe_get_optimizer_state_dict(model, optimizer, options=None):
     )
     snapshot = copy.deepcopy(optimizer.state_dict()) if had_state else None
 
-    result = get_optimizer_state_dict_fn(model, optimizer, options=options)
-
-    if had_state:
-        optimizer.load_state_dict(snapshot)
-    else:
-        optimizer.state.clear()
+    try:
+        result = get_optimizer_state_dict_fn(model, optimizer, options=options)
+    finally:
+        if had_state:
+            optimizer.load_state_dict(snapshot)
+        else:
+            optimizer.state.clear()
 
     return result
 

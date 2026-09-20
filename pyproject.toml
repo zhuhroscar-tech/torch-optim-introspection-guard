@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "torch-optim-introspection-guard"
-version = "0.1.0"
+version = "0.1.1"
 description = "Detect and safely neutralize PyTorch's get_optimizer_state_dict() step-counter mutation bug (pytorch/pytorch#164929)"
 readme = "README.md"
 license = { text = "MIT" }
