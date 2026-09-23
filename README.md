@@ -2,52 +2,23 @@
 
 # torch-optim-introspection-guard
 
-Check whether PyTorch optimizer-state introspection changes the next training step, and use a wrapper intended to preserve optimizer state around that call. This targets the behavior described in [pytorch/pytorch#164929](https://github.com/pytorch/pytorch/issues/164929), not every possible source of training divergence.
+This standalone repository has been consolidated into [`torch-correctness-guards`](https://github.com/zhuhroscar-tech/torch-correctness-guards).
 
-`get_optimizer_state_dict()` can initialize a fresh optimizer with a zero-learning-rate step. For step-dependent optimizers, advancing the counter can still change subsequent updates. The CLI compares baseline, unguarded, and guarded runs on your installed PyTorch build rather than assuming a particular version is affected.
-
-## Install and diagnose
-
-Requires Python 3.9+ and a PyTorch build exposing `torch.distributed.checkpoint.state_dict`. From source:
+Use the umbrella package going forward:
 
 ```bash
-git clone https://github.com/zhuhroscar-tech/torch-optim-introspection-guard.git
-cd torch-optim-introspection-guard
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install '.[torch]'
-torch-optim-introspection-guard
-torch-optim-introspection-guard --json
+python -m pip install 'torch-correctness-guards[torch]'
+torch-guard run optim-introspection
 ```
 
-If you already manage a compatible PyTorch installation, install `.` without the extra. Use `--seed` for a reproducible probe and `--no-color` for plain text.
-
-Exit codes: **0** means the guard matched the baseline for all tested optimizers, **1** means at least one guard check failed, and **2** means PyTorch or its required checkpoint API could not be imported. A successful guard check does not mean the upstream bug was reproduced; inspect `any_bug_present` separately.
-
-## Python API
-
-With your existing model and optimizer:
+Python API:
 
 ```python
-from torch.distributed.checkpoint.state_dict import StateDictOptions
-from torch_optim_introspection_guard import safe_get_optimizer_state_dict
-
-state = safe_get_optimizer_state_dict(
-    model, optimizer, options=StateDictOptions(full_state_dict=True)
-)
+from torch_correctness_guards import safe_get_optimizer_state_dict
 ```
 
-The wrapper deep-copies existing optimizer state and reloads it after a successful call; for a fresh optimizer, it clears the initialized state instead.
+The original functionality is preserved as the `optim-introspection` guard in the umbrella package, alongside the other PyTorch correctness diagnostics.
 
-## Scope and limitations
-
-The probe covers AdamW, Adam, NAdam, RAdam, RMSprop, SGD with and without momentum, Adagrad, and Adadelta using CPU tensors. It is not validation of fused CUDA optimizers, custom optimizer side effects, or large distributed jobs. Snapshotting can consume substantial memory; large-model overhead has not been benchmarked. Restoration runs in a `finally` block (fixed in v0.1.1), so an exception raised by the wrapped call after it has already mutated optimizer state still triggers restore/clear before the exception propagates. Test your own training setup before relying on the wrapper.
-
-## Development
-
-```bash
-python -m pip install -e '.[dev,torch]'
-python -m pytest -v
-```
+This repo is archived for history only. New fixes and releases happen in `torch-correctness-guards`.
 
 [MIT license](LICENSE).
